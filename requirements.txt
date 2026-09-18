@@ -1,0 +1,6 @@
+numpy
+scipy
+matplotlib
+stingray>=2.0
+astropy   # FITS event lists and light curves
+# optional: numba (speeds up the time-varying oscillator)
