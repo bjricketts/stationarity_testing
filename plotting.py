@@ -30,6 +30,24 @@ def plot_track(ax, track, color, outline):
             ax.plot(t, f0 + sgn * hw, color=color, lw=0.8, ls="--",
                     path_effects=fx)
 
+def most_different_blocks(z):
+    """Indices (k, l), k < l, of the two blocks whose z vectors differ most.
+
+    z is the K x J map rep.psr["z"] (NaN in unused bins). The distance is the
+    mean squared difference over the bins finite in both blocks.
+    """
+    z = np.asarray(z, float)
+    K = z.shape[0]
+    if K < 2:
+        return 0, 0
+    diff = z[:, None, :] - z[None, :, :]                  # K x K x J
+    with np.errstate(invalid="ignore"):
+        D = np.nanmean(diff ** 2, axis=2)
+    D = np.where(np.isfinite(D), D, -np.inf)
+    np.fill_diagonal(D, -np.inf)
+    k, l = np.unravel_index(np.argmax(D), D.shape)
+    return (int(k), int(l)) if k < l else (int(l), int(k))
+
 
 def _lc_panel(ax, t, counts, dt, bin_s=1.0):
     """Count rate in `bin_s` bins, with gaps left blank."""
@@ -61,7 +79,18 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
                           wspace=0.25)
 
     ax = fig.add_subplot(gs[0, :])
-    _lc_panel(ax, t, counts, dt, lc_bin)
+    tb_lc, y_lc = _lc_panel(ax, t, counts, dt, lc_bin)
+    
+    # highlight the segments that make up the two most different blocks
+    spb = g.seg_per_block
+    kA, kB = most_different_blocks(rep.psr["z"])
+    sel = ((kA, "C0", f"block {kA + 1}"), (kB, "C3", f"block {kB + 1}"))
+    for k, col, lab in sel:
+        m = np.zeros(tb_lc.size, bool)
+        for s in g.seg_time[k * spb:(k + 1) * spb]:
+            m |= (tb_lc >= s) & (tb_lc < s + g.seg_len)
+        ax.plot(tb_lc, np.where(m, y_lc, np.nan), lw=0.5, color=col, label=lab)
+    ax.legend(loc="upper left", fontsize=8)
     ax.set_xlim(t[0], t[-1] + dt)
     if param_lines:
         ax2 = ax.twinx()
@@ -85,6 +114,10 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     pc = ax.pcolormesh(edges_t, edges_f, fp.T, shading="flat", cmap="viridis",
                        norm=LogNorm(vmin=np.nanmin(fp), vmax=np.nanmax(fp)))
     plot_track(ax, track, "w", "k")
+    for k, col, _ in sel:
+            ax.axvline(tb[k], color=col, lw=1.2, ls="--",
+                       path_effects=[pe.Stroke(linewidth=2.4, foreground="w",
+                                               alpha=0.6), pe.Normal()])
     ax.set_yscale("log")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Frequency (Hz)")
@@ -94,8 +127,10 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     ax = fig.add_subplot(gs[1, 1])
     zlim = max(3.0, np.nanmax(np.abs(rep.psr["z"])))
     pc = ax.pcolormesh(edges_t, edges_f, rep.psr["z"].T, shading="flat",
-                       cmap="RdBu_r", vmin=-zlim, vmax=zlim)
+                       cmap="PuOr", vmin=-zlim, vmax=zlim)
     plot_track(ax, track, "k", "w")
+    for k, col, _ in sel:
+            ax.axvline(tb[k], color=col, lw=1.2, ls="--")
     ax.set_yscale("log")
     ax.set_xlabel("Time (s)")
     ax.set_title(r"$z$: log source-power deviation (blank: bin unused)",
@@ -111,10 +146,9 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     ax.loglog(fb, fb * pb, color="0.6", lw=1, label="all data, raw")
     ax.loglog(fb, fb * (pb - N_all), color="k", lw=1,
               label="all data, noise subtracted")
-    ax.loglog(g.freq, g.freq * g.source[0], color="C0", lw=1, alpha=0.8,
-              label="first block")
-    ax.loglog(g.freq, g.freq * g.source[-1], color="C3", lw=1, alpha=0.8,
-              label="last block")
+    for k, col, lab in sel:
+            ax.loglog(g.freq, g.freq * g.source[k], color=col, lw=1, alpha=0.8,
+                      label=lab)
     if N_all > 0:
         ax.plot(fb, fb * N_all, color="0.4", ls=":", lw=1, label="noise level")
     lo = np.nanmin(np.where(g.keep, g.freq * g.S_hat, np.nan)) / 5
@@ -136,6 +170,7 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     ax3.semilogx(g.freq, rep.bayes["p_vary_per_freq"], color="C1", lw=1,
                  marker="o", ms=3, label="P(bin varies | H1)")
     ax3.set_ylim(0, 1.05)
+    ax3.set_xlim(edges_f[0], edges_f[-1])
     ax3.set_ylabel("P(bin varies | H1)", color="C1")
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax3.get_legend_handles_labels()
