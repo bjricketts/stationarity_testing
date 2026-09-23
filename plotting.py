@@ -143,8 +143,7 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     ax.set_title("Evidence per frequency bin (unused bins omitted)")
 
     p, b = rep.psr, rep.bayes
-    txt = [f"{p['n_bins_used']}/{g.freq.size} bins used",
-           f"PSR total  p = {p.get('p_total_perm', p['p_total']):.2g}",
+    txt = [f"PSR total  p = {p.get('p_total_perm', p['p_total']):.2g}",
            f"PSR trend  p = {p.get('p_trend_perm', p['p_trend']):.2g}",
            f"max-bin    p = {p.get('p_trend_max_perm', np.nan):.2g}"]
     if rep.surrogate is not None:
