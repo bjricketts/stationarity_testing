@@ -1,47 +1,86 @@
 # stationarity_testing
 
-Test whether a light curve's power spectrum is constant in time (second-order stationarity), and simulate QPOs whose properties change with time to calibrate those tests. The folder is self-contained.
+Tests whether the power spectrum of a light curve is constant in time (second-order stationarity), with a simulator of QPOs whose properties change in time for calibrating the tests. The folder has no dependencies on other code in `QPOs_all`.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+
+# simulated light curves
+python nonstationary_qpo.py freq_drift          # QPO centroid drifts by ±10 %
+python nonstationary_qpo.py all                 # every model, figures in figures/
+
+# a light curve from a file
+python test_lightcurve.py src.lc
+```
+
+Each run prints a summary of the tests and writes a report figure and a JSON file of the statistics.
 
 ## Files
 
 | File | Contents |
 |------|----------|
-| `stationarity_tests.py` | The tests. Work on a counts array or on pre-cut segments. |
-| `test_lightcurve.py` | Run the tests on a light curve from a file (CLI). |
-| `lightcurve_io.py` | Reads files into a stingray `Lightcurve`, cuts it into GTI-respecting segments, and runs the tests on it. |
-| `nonstationary_qpo.py` | Simulator and CLI. Runs the tests on each simulation. |
-| `qpo_core.py` | Signal-generation utilities: `damped_oscillator_convolve`, `ou_process`, `build_broadband`, `dho_filter`, `lorentzian`, `make_spectra`, `apply_filter`. |
-| `plotting.py` | The report figure, shared by the simulator and the data script. |
-| `stingray_dynps_norm.md` | Suggested stingray change: per-segment normalisation in `DynamicalPowerspectrum`. |
-| `verify.py` | Simulator checks, false-positive rates under H0, detection rates under H1. |
-| `mc_fm_wander.py` | Monte Carlo of the frequency-wander model against the wander timescale tau. |
+| `stationarity_tests.py` | The tests. `run_all` runs all of them. |
+| `lightcurve_io.py` | Reads files into a stingray `Lightcurve` and cuts it into segments that respect the GTIs. |
+| `test_lightcurve.py` | Command-line interface for light curves from files. |
+| `nonstationary_qpo.py` | Simulator and command-line interface for simulated light curves. |
+| `qpo_core.py` | Signal generation: time-varying damped oscillator, Ornstein-Uhlenbeck process, broadband noise. |
+| `plotting.py` | The report figure. |
+| `verify.py` | False-positive and detection rates from simulations. |
+| `mc_fm_wander.py` | Monte Carlo of the frequency-wander model against the wander timescale. |
+| `stingray_dynps_repro.py` | Reproduction of the `DynamicalPowerspectrum` normalisation issue (see [stingray](#stingray)). |
+| `method_explanations/` | Mathematical write-ups of the three tests (LaTeX and PDF). |
+
+## Method
+
+The light curve is cut into segments (default 8 s) that do not cross gaps. Each segment's periodogram is normalised by that segment's own mean rate, which removes a linear rms-flux relation. Segments are grouped into K time blocks (default 16) and Fourier bins into J frequency bins (default 2 Fourier bins each, 0.25 to 8 Hz). Each cell of the resulting K × J grid is the mean of n = 16 periodogram ordinates. The null hypothesis is that the source power in every frequency bin is the same in all blocks.
+
+The tests:
+
+1. **PSR log-ANOVA** (Priestley & Subba Rao 1969). The log of each cell's power has a known variance, so the question becomes an analysis of variance. Four statistics are reported: the total, the uniform time effect and time × frequency interaction that make it up, a smooth-trend statistic (`--n-poly` orthogonal polynomials in time per frequency bin), and the largest single-bin trend. Permutation p-values shuffle the segments in time. See `method_explanations/psr_method.pdf`.
+2. **Surrogate test** (Borgnat et al. 2010). The statistic is the variance over time of the distance between each window's multitaper spectrum and the mean spectrum. It is compared with surrogates made by randomising the Fourier phases of the light curve. Reports an index of non-stationarity (INS) and a p-value. See `method_explanations/surrogate_method.pdf`.
+3. **Bayesian test**. H0: each frequency bin has a constant log power. H1: a fraction π of bins has log power that follows a polynomial in time, with coefficients drawn from N(0, τ²). τ (log-uniform, 0.05 to 2) and π (uniform) are marginalised on a grid. Outputs are P(H0 | data) for a chosen prior (`--prior`, default 0.5) and a Bayes factor for each frequency bin (`log10_BF_per_freq`), which compares "this bin varies" with "this bin is constant". See `method_explanations/bayes_method.pdf`.
+4. **SBB bound** (Sellke, Bayarri & Berger 2001). Converts the smallest reported p-value into a lower bound on P(H0 | p): P(H0 | p) ≥ 1/(1 + 1/(−e p ln p)). It does not correct for testing several statistics.
+
+Quote the permutation p-values. The χ² p-values assume Gaussian statistics and are too small for nonlinear variability and at low count rates (see [Calibration](#calibration)).
+
+### Poisson noise
+
+The null hypothesis concerns the source spectrum, so the Poisson level is subtracted by default (`--noise poisson`; `--noise none` turns this off).
+
+Each segment's level comes from `stingray.fourier.poisson_level` at that segment's mean rate r: 2/r in fractional normalisation, 2r in absolute normalisation, and 2r/(r − b)² with a background rate b (`--bkg-rate`). The level therefore follows changes in count rate. It is averaged over the segments of each block and subtracted from each cell.
+
+Subtraction changes the mean and variance of the log power. The tests use Y = ln(C − N) − m(N/S), with variance v(N/S), where m and v are the exact moments of this transform for a Gamma-distributed cell, tabulated numerically. For N = 0 they are ψ(n) − ln n and ψ′(n). Because the moments differ between blocks when the rate changes, every statistic is a weighted fit.
+
+Y becomes skewed as the noise fraction grows. Only frequency bins with N/(S + N) ≤ `--max-noise-frac` (default 0.3), and a predicted fractional error per cell of at most 0.5, enter the tests. At 500 ct/s with default settings this leaves 5 of 31 bins (0.3 to 2 Hz). Fewer blocks (`--blocks`) or wider bins (`--fbin`) admit more bins. Cells below 1 % of the mean source power after subtraction are floored, and the summary reports how many.
+
+The permutation test moves each segment's noise level with its periodogram. The surrogate test subtracts each window's own Poisson level and uses the same frequency bins as the other tests. In the report figure the dynamic power spectrum, z map and block spectra are all noise subtracted, and unused bins are blank.
 
 ## Real data
-
-`test_lightcurve.py` reads a light curve, cuts it into gap-free segments and runs the tests:
 
 ```bash
 # event list, PI 50-1000, binned at 1/512 s
 python test_lightcurve.py ni1234_cl.evt --dt 0.0019531 --pi 50 1000 --seg 8 --blocks 16
 
-# FITS light curve, with a background rate that would otherwise dilute the rms
+# FITS light curve with a background rate
 python test_lightcurve.py src.lc --bkg-rate 12.4
 
-# text file (time, rate), noise level taken from high frequencies
+# text file (time, rate), noise level measured above 40 Hz
 python test_lightcurve.py lc.txt --dt 0.008 --noise highfreq --f-noise 40
 ```
 
-It prints a summary and writes `results/<stem>.png` (the report figure) and `results/<stem>.json`.
+Output goes to `results/<stem>.png` and `results/<stem>.json`.
 
-Input is turned into a stingray `Lightcurve`. Event lists go through `EventList.read` (fmt='hea'), are filtered on PI (`--pi`) or energy (`--energy`, with `--rmf`), and are binned with `EventList.to_lc` at `--dt`. Binned FITS products are read with astropy, which keeps the RATE/COUNTS and FRACEXP handling explicit (bins with FRACEXP < 0.99 are dropped). Text/CSV (`--columns`, `--kind`) and `.npy`/`.npz` have small readers.
+**Reading.** Event lists are read with `EventList.read` (fmt='hea'), filtered on PI (`--pi`) or energy (`--energy` with `--rmf`), and binned with `EventList.to_lc` at `--dt`. Binned FITS light curves are read with astropy, which handles RATE and COUNTS columns and drops bins with FRACEXP < 0.99. Text and CSV files (`--columns`, `--kind`) and `.npy`/`.npz` files are also supported.
 
-GTIs come from the file, or are inferred from gaps in the time axis, and bins outside them are dropped. Segmentation uses `stingray.gti.bin_intervals_from_gtis`, so segments never span a gap or a GTI boundary, because a segment containing a gap has a distorted periodogram; leftover bins at the end of each stretch are dropped. Blocks are groups of consecutive segments, so with gaps they cover unequal spans of clock time, and the figure uses each block's mean segment start time. The surrogate test needs one uninterrupted stretch and is skipped when the light curve has gaps.
+**Gaps.** GTIs are taken from the file or inferred from gaps in the time axis. Segments are cut with `stingray.gti.bin_intervals_from_gtis` and never span a gap, since a gap distorts the periodogram. Bins left over at the end of each good interval are dropped. With gaps, blocks cover unequal spans of time, and the figure places each block at the mean start time of its segments. The surrogate test needs uninterrupted data and is skipped when there are gaps.
 
-`--bkg-rate` renormalises the fractional rms to the source rate, so background dilution that follows the count rate is not read as non-stationarity. The Poisson level assumes no dead time; `--noise highfreq` with `--f-noise` above the source band scales the level to the measured high-frequency power, and `--noise-level` or `--noise-scale` set it directly.
+**Background and dead time.** `--bkg-rate` renormalises the fractional rms to the source rate, so that a background fraction varying with count rate is not detected as non-stationarity. The Poisson level assumes no dead time. If that does not hold, `--noise highfreq --f-noise F` scales the level to match the power above F Hz, and `--noise-level` or `--noise-scale` set it directly.
 
-### Calling the tests from Python
+### From Python
 
-`run_all` (or `run_lightcurve`, a thin alias in `lightcurve_io`) takes a stingray `Lightcurve` with its GTIs and returns a report object:
+`run_all` takes a stingray `Lightcurve` and returns a report object:
 
 ```python
 import numpy as np
@@ -50,91 +89,65 @@ from stationarity_tests import run_all
 from lightcurve_io import load_lightcurve
 
 lc = Lightcurve(time, counts, dt=dt, gti=np.array([[0.0, 300.0], [400.0, 1024.0]]))
-# or: lc = load_lightcurve("src.lc")       # FITS, text/CSV or NumPy -> Lightcurve
+# or: lc = load_lightcurve("src.lc")       # FITS, text/CSV or NumPy
 
 rep = run_all(lc=lc, seg_len=8.0, n_blocks=16, fmin=0.25, fmax=8.0,
               n_perm=2000, surrogate=False)
 
 print(rep.summary())
-rep.p_values()                    # permutation p-values of each statistic
-rep.bayes["P_stationary"]         # posterior probability of stationarity
-rep.grid.freq[rep.grid.keep]      # frequency bins that passed the noise cut
-rep.psr["z"]                      # K x J map of log source-power deviations
+rep.p_values()                     # permutation p-values of each statistic
+rep.bayes["P_stationary"]          # posterior probability of stationarity
+rep.bayes["log10_BF_per_freq"]     # per-bin Bayes factor (NaN in unused bins)
+rep.grid.freq[rep.grid.keep]       # frequency bins used by the tests
+rep.psr["z"]                       # K x J map of log source-power deviations
 ```
 
-Gaps are handled by the segmentation, so a light curve with several GTIs needs nothing extra; only the surrogate test is skipped, since it needs uninterrupted data.
+A counts array also works: `run_all(counts, dt, seg_len=8.0, ...)`. `lightcurve_io.run_lightcurve` is equivalent to `run_all(lc=...)`.
 
-A bare counts array works too, and is wrapped in a `Lightcurve` internally:
+Other options: `fbin`, `norm`, `noise`, `max_noise_frac`, `bkg_rate`, `noise_scale`, `noise_level_value`, `f_noise`, `n_poly`, `n_surr`, `prior_stationary` and `seed`. `surrogate=True` adds the surrogate test, which takes most of the run time.
 
-```python
-rep = run_all(counts, dt, seg_len=8.0, n_blocks=16, n_perm=2000, surrogate=False)
-```
-
-Other options: `fbin`, `norm`, `noise`, `max_noise_frac`, `bkg_rate`, `noise_scale`, `noise_level_value`, `f_noise`, `n_poly`, `n_surr`, `prior_stationary` and `seed`. `surrogate=True` adds the surrogate test, which needs contiguous data and dominates the runtime.
-
-The report figure is one more call: `plotting.plot_report(rep, "out.png", time, counts, dt)`. The individual tests (`build_tf_grid`, `psr_test`, `bayes_test`, `surrogate_test`) can be called directly too; `run_all` only chains them.
-
-## Tests
-
-Light curves are cut into segments (default 8 s) with `stingray.gti.bin_intervals_from_gtis`, and the per-segment periodograms come from `AveragedPowerspectrum(..., use_common_mean=False, save_all=True)`, so each segment is normalised by its own mean, which removes a linear rms-flux relation. Segments are grouped into K time blocks (default 16) and Fourier bins into J frequency bins (default 2 raw bins each, 0.25 to 8 Hz). Each cell is then an average of n = 16 periodogram ordinates.
-
-1. PSR log-ANOVA (Priestley & Subba Rao 1969). Under H0 the log cell power has known variance, so the sums of squares are chi². The script reports the uniform-time and time × frequency effects, a trend statistic that projects each frequency bin's log power onto `--n-poly` orthogonal polynomials in time, and the largest single-bin trend (a scan statistic). Permutation p-values shuffle the segments in time and do not rely on the chi² approximation.
-2. Surrogate test (Borgnat et al. 2010). Multitaper spectrogram, variance over time of a KL + log-spectral distance to the mean spectrum, compared with phase-randomised surrogates. Reports the index of non-stationarity (INS) and a gamma-fit p-value.
-3. Bayesian P(stationary). H0: constant log source spectrum. H1: a random fraction pi of frequency bins has log power evolving as a polynomial in time, with coefficient prior N(0, tau²). The Bayes factor is analytic for each (tau, pi); tau (log-uniform, 0.05 to 2) and pi (uniform) are marginalised on a grid. The output is P(H0 | data) for the chosen prior (`--prior`, default 0.5), along with the posterior probability that each frequency bin varies.
-4. SBB bound (Sellke, Bayarri & Berger 2001). For the smallest reported p-value, P(H0 | p) ≥ 1/(1 + 1/(−e p ln p)): the least favourable posterior probability over a broad class of alternatives. It does not correct for testing several statistics.
-
-### Poisson noise
-
-The null hypothesis concerns the source spectrum, so the counting noise is removed (`--noise poisson`, the default; `--noise none` switches it off).
-
-Each segment's Poisson level comes from `stingray.fourier.poisson_level` with that segment's own mean rate r: N = 2/r in frac normalisation, 2r in abs normalisation, and 2r/(r − bkg)² when `--bkg-rate` is set. N therefore follows a changing count rate, and is tracked per segment and averaged per block. The source estimate for each cell is C − N.
-
-Subtracting N changes the mean and variance of the log power, so the tests use Y = ln(C − N) − m(N/S) with variance v(N/S), where m and v are the exact moments of that transform for a Gamma(n) cell, tabulated numerically. For N = 0 they reduce to ψ(n) − ln n and ψ′(n). The moments differ between blocks when the rate changes, so every statistic is a weighted fit.
-
-Y becomes skewed as the noise fraction grows, so only bins where N/(S + N) ≤ `--max-noise-frac` (default 0.3), and where a noise-subtracted cell has a predicted fractional error ≤ 0.5, enter the tests. At 500 ct/s with the default settings this leaves 5 of 31 bins (0.3 to 2 Hz); fewer blocks (`--blocks`) or wider bins (`--fbin`) bring more bins in. Cells that fall below 1 % of the mean source power after subtraction are floored, and the summary reports how many.
-
-Permutation p-values shuffle segments together with their noise levels. The surrogate test subtracts each window's Poisson level and uses the same frequency bins. In the figures, the dynamic PSD, the z map and the block spectra are all noise subtracted, and unused bins are blank.
+The report figure is made with `plotting.plot_report(rep, "out.png", time, counts, dt)`. The individual tests (`build_tf_grid`, `psr_test`, `bayes_test`, `surrogate_test`) can also be called directly.
 
 ## Simulation
 
-The QPO is a white-noise-driven damped oscillator integrated with a time-varying state-space step:
+The QPO is a damped harmonic oscillator driven by white noise, with coefficients that can change in time:
 
 ```
 q'' + 2 gamma(t) q' + omega(t)^2 q = 2 omega sqrt(gamma/dt) xi(t),   omega = 2 pi f0(t),  gamma = omega/(2 Q(t))
 rate(t) = mean(t) * (1 + bb_rms * b(t) + rms(t) * q(t))               Poisson sampled
 ```
 
-The drive scaling keeps Var[q] = 1 at every instant, so drifts in `f0` or `Q` do not also change the QPO amplitude; amplitude changes come only from `rms(t)`. `b(t)` is a two-Lorentzian Timmer-Koenig broadband realisation. Each of `f0`, `Q`, `rms` and `mean` evolves as `p0 (1 + delta g(t))`, with `g` a `linear`, `step`, `sine` or `burst` profile.
+The drive amplitude keeps Var[q] = 1 at all times, so changing `f0` or `Q` does not change the QPO amplitude, which is set by `rms(t)` alone. `b(t)` is a broadband realisation of two Lorentzians (Timmer & Koenig method). Each of `f0`, `Q`, `rms` and `mean` can evolve as `p0 (1 + delta g(t))`, where `g` is a `linear`, `step`, `sine` or `burst` profile.
 
-| Model | Truth | Default |
-|-------|-------|---------|
-| `stationary` | H0 | f0 = 2 Hz, Q = 8, rms = 10 %, broadband 20 %, 1e4 ct/s, 1024 s at dt = 1/512 |
-| `fm_wander` | H0 | f0 wanders as an OU process (sigma 0.15 Hz, tau 5 s) |
+| Model | Truth | Settings |
+|-------|-------|----------|
+| `stationary` | H0 | f0 = 2 Hz, Q = 8, QPO rms 10 %, broadband rms 20 %, 1e4 ct/s, 1024 s, dt = 1/512 s |
+| `fm_wander` | H0 | f0 follows an OU process (σ = 0.15 Hz, τ = 5 s) |
 | `lognormal` | H0 | exponentiated process with a linear rms-flux relation |
-| `low_rate` | H0 | 500 ct/s, so the Poisson level dominates most bins |
-| `rate_drift` | H0 for the source | mean rate changes by ±60 % at fixed fractional variability, so the Poisson level 2/rate changes and the source spectrum does not |
+| `low_rate` | H0 | 500 ct/s; the Poisson level dominates most bins |
+| `rate_drift` | H0 (source) | mean rate changes by ±60 % at fixed fractional variability; the Poisson level changes, the source spectrum does not |
 | `freq_drift` | H1 | f0 changes by ±10 % |
 | `rms_drift` | H1 | QPO rms changes by ±50 % |
 | `q_drift` | H1 | Q changes by ±80 % |
 
+Further examples:
+
 ```bash
-pip install -r requirements.txt
-python nonstationary_qpo.py all                                   # every model -> figures/
 python nonstationary_qpo.py freq_drift --delta 0.03 --profile step
 python nonstationary_qpo.py rms_drift --profile sine --period 256 --n-poly 6
-python nonstationary_qpo.py rate_drift --mean 1000 --noise none    # effect of skipping subtraction
+python nonstationary_qpo.py rate_drift --mean 1000 --noise none    # without noise subtraction
 python nonstationary_qpo.py low_rate --max-noise-frac 0.5
 python verify.py --nsim 40 --workers 4
 ```
 
-Each run prints a summary and writes `figures/<model>[_<profile>].png` and a `.json` with the statistics.
+Output goes to `figures/<model>[_<profile>].png` and a matching `.json`.
 
 ### Calibration
 
-From `verify.py --nsim 100`, with 200 permutations per simulation. Each entry is the fraction of simulations with p < 0.05 (chi² / permutation).
+From `verify.py --nsim 100` with 200 permutations per simulation. Entries are the fraction of simulations with p < 0.05, given as χ² / permutation.
 
-| Case | Total | Trend | Max-bin (perm) | Median P(stationary) |
-|------|-------|-------|----------------|----------------------|
+| Case | Total | Trend | Max-bin (perm.) | Median P(stationary) |
+|------|-------|-------|-----------------|----------------------|
 | stationary, 1e4 ct/s | 3 / 4 % | 4 / 4 % | 8 % | 0.71 |
 | lognormal | 4 / 4 % | 7 / 5 % | 2 % | 0.73 |
 | low_rate, 500 ct/s | 9 / 4 % | 6 / 4 % | 7 % | 0.63 |
@@ -144,43 +157,44 @@ From `verify.py --nsim 100`, with 200 permutations per simulation. Each entry is
 | rms_drift ±60 %, 1e4 ct/s | 100 / 97 % | 100 / 100 % | 100 % | 1e-18 |
 | rms_drift ±60 %, 1000 ct/s | 100 / 100 % | 100 / 100 % | 100 % | 1e-16 |
 
-Without noise subtraction a rate change alone is always detected, because the Poisson level 2/r moves with the rate. The analytic chi² for the total statistic runs high at low rates (9 %), since the noise-subtracted log power is skewed; the summary quotes the permutation p-values, and so should any reported result.
+Without noise subtraction a change in count rate alone is always detected, because the Poisson level 2/r changes with the rate. At 500 ct/s the χ² p-value of the total statistic rejects 9 % of stationary simulations, because the noise-subtracted log power is skewed; the permutation value stays at 4 %.
 
 ### Frequency wander and timescale
 
-`fm_wander` is a stationary process, but the tests treat it as stationary only while tau is much shorter than the block length (64 s by default). `mc_fm_wander.py` measures the rejection rate of every statistic against tau / block length, and writes a CSV of all simulations and a plot to `mc_results/`:
+`fm_wander` is stationary, but its segment spectra differ from one another while the wander timescale τ is not short compared with a segment. `mc_fm_wander.py` measures the rejection rate of each statistic against τ and writes a CSV and a plot to `mc_results/`:
 
 ```bash
 python mc_fm_wander.py --taus 1 5 20 64 256 --nsim 100 --workers 4
 python mc_fm_wander.py --taus 1 5 20 64 256 --nsim 100 --workers 4 --surrogate   # slower
 ```
 
-Rates near 5 % for tau well below the segment length mean the tests are calibrated for this nonlinear but stationary process. Rising rates for tau of order a block length or longer are expected, because the process is then stationary only on timescales longer than the observation.
-
-### What comes from stingray
-
-Reading (`EventList.read`, `EventList.to_lc`, `Lightcurve`), GTI handling and segmentation (`bin_intervals_from_gtis`, `apply_gtis`, `truncate`), the per-segment periodograms (`AveragedPowerspectrum` with `use_common_mean=False, save_all=True`), the Poisson level (`stingray.fourier.poisson_level`, including its `backrate`), log-rebinning for the figure (`rebin_log`) and the simulator's broadband realisation (`stingray.simulator`).
-
-What is not: the multitaper spectrogram of the surrogate test, and the statistics themselves. `DynamicalPowerspectrum` would cover the time-frequency grid, but it always normalises by the mean common to all segments, which reintroduces the rms-flux trend the tests must remove, and it exposes only one mean rate rather than one per segment. `stingray_dynps_norm.md` proposes adding `use_common_mean` (and a per-segment `meanrate`) to that class; with it, `segment_spectra` in `stationarity_tests.py` could call `DynamicalPowerspectrum` directly.
+Rejection rates near 5 % for τ well below the segment length show that the tests are calibrated for this nonlinear, stationary process. Rates rise once τ approaches the block length (64 s by default), where the process is stationary only on timescales longer than the observation.
 
 ## Caveats
 
-- Stationarity depends on the timescale. The segment length sets the timescale on which the tests treat variability as stationary. The permutation null assumes segments are exchangeable, so any modulation with a correlation time comparable to or longer than a segment counts as non-stationarity, and so do real differences between blocks. Choose `--seg` (and `--blocks`) for the timescale you want to test.
-- Red noise below 1/segment correlates adjacent segments, which breaks the independence behind both the chi² and the permutation p-values. Check with `stationary` simulations that use your own PSD.
-- The subtraction assumes pure Poisson noise. Dead time, pile-up or background subtraction change the noise level; measure it from frequencies where the source is negligible and pass it with `--noise-level`, `--noise-scale` or `--noise highfreq`.
-- Excluding noise-dominated bins costs sensitivity at low count rates. The selection uses the time-averaged spectrum, so a feature that is strong only for part of the observation can fall below the cut.
-- P(stationary) depends on the H1 prior. The smallest tau allowed caps how far P(H0) can rise, because H1 with a very small tau is almost indistinguishable from H0; stationary data here give P(H0) of about 0.7 to 0.8. The model treats frequency bins as independent and uses a Gaussian approximation for the log power, accurate for n of about 8 or more at low noise fractions.
-- stingray 2.x's `Simulator.simulate` draws from the global `np.random` state and ignores `random_state`, so `qpo_core.build_broadband` seeds the global state itself to stay reproducible.
-- `verify.py` and `mc_fm_wander.py` set one BLAS thread per worker, because threaded BLAS in forked workers can deadlock.
+- **Timescale.** The segment length sets the timescale below which variability counts as stationary. The permutation test assumes segments are exchangeable, so a modulation with a correlation time comparable to a segment or longer is detected as non-stationarity. Choose `--seg` and `--blocks` for the timescale you want to test.
+- **Red noise.** Power below 1/(segment length) correlates neighbouring segments, which affects both the χ² and permutation p-values. Check with `stationary` simulations using your own power spectrum.
+- **Noise level.** The subtraction assumes pure Poisson noise. Dead time, pile-up and background subtraction change the level; measure it where the source is negligible and pass it with `--noise-level`, `--noise-scale` or `--noise highfreq`.
+- **Low count rates.** Excluding noise-dominated bins costs sensitivity. The selection uses the time-averaged spectrum, so a feature that is strong for only part of the observation can be excluded.
+- **Bayesian prior.** P(stationary) depends on the H1 prior. Alternatives with very small τ are almost identical to H0, so the lower limit of τ caps P(H0): stationary data give about 0.7. The model treats frequency bins as independent and approximates the log power as Gaussian, which is accurate for n ≳ 8 at low noise fractions.
+- **Reproducibility.** stingray 2.x's `Simulator.simulate` ignores `random_state`, so `qpo_core.build_broadband` seeds the global NumPy state itself.
+- **Parallel runs.** `verify.py` and `mc_fm_wander.py` use one BLAS thread per worker, since threaded BLAS in forked workers can deadlock.
+
+## stingray
+
+stingray provides the reading (`EventList.read`, `EventList.to_lc`, `Lightcurve`), GTI handling and segmentation (`bin_intervals_from_gtis`, `apply_gtis`, `truncate`), the per-segment periodograms (`AveragedPowerspectrum` with `use_common_mean=False, save_all=True`), the Poisson level (`fourier.poisson_level`), log-rebinning for the figure (`rebin_log`), and the broadband simulation (`stingray.simulator`). The multitaper spectrogram and the test statistics are implemented here.
+
+`DynamicalPowerspectrum` would provide the time-frequency grid directly, but it normalises every segment by the mean rate of the whole observation, which reintroduces the rms-flux trend. It does not accept `use_common_mean`. `stingray_dynps_repro.py` demonstrates this. If the option is added, `segment_spectra` in `stationarity_tests.py` can use `DynamicalPowerspectrum`.
 
 ## References
 
-- van der Klis 1989, in Timing Neutron Stars (NATO ASI C262), 27. Poisson level and statistics of X-ray power spectra.
-- Priestley & Subba Rao 1969, JRSS B 31, 140. Test for non-stationarity of time series.
 - Borgnat, Flandrin, Honeine, Richard & Xiao 2010, IEEE TSP 58, 3459. Testing stationarity with surrogates: a time-frequency approach.
-- von Sachs & Neumann 2000, JASA 95, 597; Nason 2013, JRSS B 75, 879. Wavelet-domain tests (R package `locits`).
-- Paparoditis 2010, JASA 105, 839 (rolling local periodograms); Dwivedi & Subba Rao 2011, JTSA 32, 68; Jentsch & Subba Rao 2015, J. Econometrics 185, 124.
-- Rosen, Wood & Stoffer 2012, JASA 107, 1575. AdaptSPEC: Bayesian piecewise-stationary spectra.
-- Vaughan, Edelson, Warwick & Uttley 2003, MNRAS 345, 1271. Tests for non-stationarity in X-ray light curves.
+- Dwivedi & Subba Rao 2011, JTSA 32, 68; Jentsch & Subba Rao 2015, J. Econometrics 185, 124.
 - Hübner et al. 2022, ApJS 259, 32. Pitfalls of periodograms: the non-stationarity bias in QPO analysis.
+- Nason 2013, JRSS B 75, 879; von Sachs & Neumann 2000, JASA 95, 597. Wavelet-domain tests (R package `locits`).
+- Paparoditis 2010, JASA 105, 839. Rolling local periodograms.
+- Priestley & Subba Rao 1969, JRSS B 31, 140. Test for non-stationarity of time series.
+- Rosen, Wood & Stoffer 2012, JASA 107, 1575. AdaptSPEC: Bayesian piecewise-stationary spectra.
 - Sellke, Bayarri & Berger 2001, Am. Stat. 55, 62. Calibration of p-values.
+- Vaughan, Edelson, Warwick & Uttley 2003, MNRAS 345, 1271. Tests for non-stationarity in X-ray light curves.
+- van der Klis 1989, in Timing Neutron Stars (NATO ASI C262), 27. Poisson level and statistics of X-ray power spectra.
