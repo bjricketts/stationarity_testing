@@ -573,6 +573,13 @@ def bayes_test(grid: TFGrid, n_poly=3, tau_range=(0.05, 2.0), n_tau=30,
         `time_basis`. tau is in natural-log power (tau ~ 0.1 is ~10 %).
     mu_j has a flat prior in both models. Priors: tau log-uniform in
     `tau_range`, pi uniform on (0, 1].
+
+    Per-bin outputs (NaN in unused bins):
+      log10_BF_per_freq        inclusion Bayes factor of bin j, marginal over
+                               tau, pi and the other bins' indicators
+      log10_BF_alone_per_freq  B_j(tau) averaged over the tau prior, i.e. bin
+                               j analysed on its own
+      p_vary_per_freq          P(bin j varies | D, H1)
     """
     keep = grid.keep
     Y, V, _ = log_source(grid.cells[:, keep], grid.noise,
@@ -595,17 +602,30 @@ def bayes_test(grid: TFGrid, n_poly=3, tau_range=(0.05, 2.0), n_tau=30,
     post_lo = -lnB10 + prior_lo
     p0 = 1.0 / (1.0 + np.exp(-post_lo))
 
-    w = np.exp(L - L.max())
-    w /= w.sum()
-    p_bin = np.exp(lp - per)
+    lw = L - logsumexp(L)                         # log posterior of (tau, pi)
+    w = np.exp(lw)
+    # P(bin j varies | D, H1) and its complement, in log space
+    ln_in = logsumexp(lw[:, :, None] + lp - per, axis=(0, 1))
+    ln_out = logsumexp(lw[:, :, None] + lq - per, axis=(0, 1))
     p_var = np.full(grid.freq.size, np.nan)
-    p_var[keep] = np.sum(w[:, :, None] * p_bin, axis=(0, 1))
+    p_var[keep] = np.exp(ln_in)
+    # Inclusion Bayes factor p(D | bin j varies) / p(D | bin j constant),
+    # marginal over tau, pi and the other bins. With pi uniform the prior
+    # inclusion odds are 1, so it equals the posterior inclusion odds.
+    bf_incl = np.full(grid.freq.size, np.nan)
+    bf_incl[keep] = (ln_in - ln_out) / np.log(10)
+    # Standalone Bayes factor: bin j alone, B_j(tau) averaged over the tau
+    # prior. Depends on tau_range through the Occam factor.
+    bf_alone = np.full(grid.freq.size, np.nan)
+    bf_alone[keep] = (logsumexp(lnBj, axis=0) - np.log(n_tau)) / np.log(10)
     imax = np.unravel_index(np.argmax(L), L.shape)
     return dict(
         log10_B01=-lnB10 / np.log(10),
         P_stationary=p0,
         tau_map=tau[imax[0]], pi_map=pis[imax[1]],
         tau_posterior=w.sum(axis=1), tau_grid=tau,
+        log10_BF_per_freq=bf_incl,
+        log10_BF_alone_per_freq=bf_alone,
         p_vary_per_freq=p_var,
         n_poly=E.shape[1],
     )

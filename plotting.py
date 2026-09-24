@@ -6,8 +6,8 @@ Report figure for a stationarity test, used by both the simulator
 
 Panels: light curve; dynamic power spectrum (Poisson level removed, log
 colour scale); the z map of log source-power deviations; the time-averaged
-spectrum with the first and last block; and the per-bin evidence. Bins that
-the tests did not use are blank.
+spectrum with the two most different blocks; and the per-bin trend p-value
+and Bayes factor. Bins that the tests did not use are blank.
 """
 from __future__ import annotations
 
@@ -167,15 +167,21 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel(r"$-\log_{10} p$")
     ax3 = ax.twinx()
-    ax3.semilogx(g.freq, rep.bayes["p_vary_per_freq"], color="C1", lw=1,
-                 marker="o", ms=3, label="P(bin varies | H1)")
-    ax3.set_ylim(0, 1.05)
+    lbf = rep.bayes["log10_BF_per_freq"]
+    ax3.semilogx(g.freq, lbf, color="C1", lw=1, marker="o", ms=3,
+                 label=r"$\log_{10}$ BF$_j$ (bin varies : constant)")
+    for y in (-1, 1):
+        ax3.axhline(y, color="C1", ls=":", lw=0.8, alpha=0.6)
+    ax3.axhline(0, color="C1", ls="-", lw=0.5, alpha=0.4)
+    top = max(1.5, 1.1 * np.nanmax(np.abs(lbf)))
+    ax3.set_ylim(-top, top)
     ax3.set_xlim(edges_f[0], edges_f[-1])
-    ax3.set_ylabel("P(bin varies | H1)", color="C1")
+    ax3.set_ylabel(r"$\log_{10}$ BF$_j$", color="C1")
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax3.get_legend_handles_labels()
     ax.legend(h1 + h2, l1 + l2, fontsize=8, loc="upper left")
-    ax.set_title("Evidence per frequency bin (unused bins omitted)")
+    ax.set_title("Per-bin trend p-value and Bayes factor "
+                 "(unused bins omitted)")
 
     p, b = rep.psr, rep.bayes
     txt = [f"PSR total  p = {p.get('p_total_perm', p['p_total']):.2g}",
