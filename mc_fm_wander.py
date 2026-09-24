@@ -45,9 +45,9 @@ from stationarity_tests import (build_tf_grid, psr_test, bayes_test,  # noqa: E4
                                 surrogate_test, grid_freq_ranges)
 
 COLS = ["p_total_chi2", "p_trend_chi2", "p_total_perm", "p_trend_perm",
-        "p_maxbin_perm", "P_stationary", "p_surrogate"]
+        "p_maxbin_perm", "P_stationary", "p_surrogate", "p_scan_perm"]
 LABELS = ["total chi2", "trend chi2", "total perm", "trend perm",
-          "max-bin perm", "P(stat)<0.05", "surrogate"]
+          "max-bin perm", "P(stat)<0.05", "surrogate", "window scan perm"]
 
 
 def one(job):
@@ -64,7 +64,8 @@ def one(job):
                             n_surr=a.n_surr,
                             freq_ranges=grid_freq_ranges(g), rng=seed)["p_gamma"]
     return (tau, seed, r["p_total"], r["p_trend"], r["p_total_perm"],
-            r["p_trend_perm"], r["p_trend_max_perm"], b["P_stationary"], ps)
+            r["p_trend_perm"], r["p_trend_max_perm"], b["P_stationary"], ps,
+            r["p_scan_perm"])
 
 
 def wilson(k, n, z=1.96):

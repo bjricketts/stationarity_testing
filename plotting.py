@@ -15,6 +15,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.colors import LogNorm
+from matplotlib.patches import Rectangle
+from matplotlib import ticker
 
 
 
@@ -47,6 +49,18 @@ def most_different_blocks(z):
     np.fill_diagonal(D, -np.inf)
     k, l = np.unravel_index(np.argmax(D), D.shape)
     return (int(k), int(l)) if k < l else (int(l), int(k))
+
+
+def _plain_log_axis(axis):
+    """Log frequency axis labelled 0.2, 0.5, 1, 2, 5, ... in plain numbers.
+
+    Majors at 1, 2 and 5 per decade, so a range under one decade still gets
+    labels; minor ticks are unlabelled so they cannot overlap.
+    """
+    axis.set_major_locator(ticker.LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+    axis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+    axis.set_minor_locator(ticker.LogLocator(base=10, subs=np.arange(2, 10)))
+    axis.set_minor_formatter(ticker.NullFormatter())
 
 
 def _lc_panel(ax, t, counts, dt, bin_s=1.0):
@@ -119,6 +133,7 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
                        path_effects=[pe.Stroke(linewidth=2.4, foreground="w",
                                                alpha=0.6), pe.Normal()])
     ax.set_yscale("log")
+    _plain_log_axis(ax.yaxis)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Frequency (Hz)")
     ax.set_title(r"Dynamic PSD, $\nu (P_\nu - N)$")
@@ -131,9 +146,17 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     plot_track(ax, track, "k", "w")
     for k, col, _ in sel:
             ax.axvline(tb[k], color=col, lw=1.2, ls="--")
+    if "scan_blocks" in rep.psr:          # window picked by the window scan
+        a, b = rep.psr["scan_blocks"]
+        js = int(np.argmin(np.abs(g.freq - rep.psr["f_scan"])))
+        ax.add_patch(Rectangle((edges_t[a], edges_f[js]),
+                               edges_t[b] - edges_t[a],
+                               edges_f[js + 1] - edges_f[js], fill=False,
+                               ec="k", lw=1.5, zorder=5))
     ax.set_yscale("log")
+    _plain_log_axis(ax.yaxis)
     ax.set_xlabel("Time (s)")
-    ax.set_title(r"$z$: log source-power deviation (blank: bin unused)",
+    ax.set_title(r"$z$: log source-power deviation (box: window scan)",
                  fontsize=10)
     fig.colorbar(pc, ax=ax, pad=0.01)
 
@@ -176,6 +199,7 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     top = max(1.5, 1.1 * np.nanmax(np.abs(lbf)))
     ax3.set_ylim(-top, top)
     ax3.set_xlim(edges_f[0], edges_f[-1])
+    _plain_log_axis(ax.xaxis)
     ax3.set_ylabel(r"$\log_{10}$ BF$_j$", color="C1")
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax3.get_legend_handles_labels()
@@ -186,7 +210,8 @@ def plot_report(rep, savepath, t, counts, dt, track=None,
     p, b = rep.psr, rep.bayes
     txt = [f"PSR total  p = {p.get('p_total_perm', p['p_total']):.2g}",
            f"PSR trend  p = {p.get('p_trend_perm', p['p_trend']):.2g}",
-           f"max-bin    p = {p.get('p_trend_max_perm', np.nan):.2g}"]
+           f"max-bin    p = {p.get('p_trend_max_perm', np.nan):.2g}",
+           f"window scan p = {p.get('p_scan_perm', np.nan):.2g}"]
     if rep.surrogate is not None:
         txt.append(f"Surrogate INS = {rep.surrogate['INS']:.2f}, "
                    f"p = {rep.surrogate['p_gamma']:.2g}")

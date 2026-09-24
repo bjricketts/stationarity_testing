@@ -93,6 +93,9 @@ def build_parser():
     t.add_argument("--bkg-rate", type=float, default=0.0,
                    help="background rate included in the data [ct/s]")
     t.add_argument("--max-noise-frac", type=float, default=0.3)
+    t.add_argument("--scan-width", type=int, default=None,
+                   help="longest run of blocks in the window scan "
+                        "(default: half the blocks)")
     t.add_argument("--n-poly", type=int, default=3,
                    help="polynomial degree of the time-evolution model; "
                         "0 = arbitrary time dependence")
@@ -139,7 +142,8 @@ def main():
                   noise=args.noise, max_noise_frac=args.max_noise_frac,
                   bkg_rate=args.bkg_rate, noise_scale=args.noise_scale,
                   noise_level_value=args.noise_level, f_noise=args.f_noise,
-                  n_poly=args.n_poly or None, n_perm=args.n_perm,
+                  n_poly=args.n_poly or None,
+                  scan_max_width=args.scan_width, n_perm=args.n_perm,
                   n_surr=args.n_surr, surrogate=not args.no_surrogate,
                   prior_stationary=args.prior, seed=args.seed)
     print(rep.summary())

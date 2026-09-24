@@ -372,7 +372,37 @@ def _psr_stats(Y, V, E):
     return S_T, S_IR, S_trend_j, z
 
 
-def psr_test(grid: TFGrid, n_poly=3, n_perm=2000, rng=None) -> dict:
+def scan_windows(K, max_width=None, min_width=1):
+    """All runs of consecutive blocks [a, b) with min_width <= b - a <= max_width.
+
+    A window and its complement give the same contrast, so widths up to K // 2
+    cover every split of the blocks into a run and the rest.
+    """
+    max_width = K // 2 if max_width is None else min(int(max_width), K - 1)
+    return np.array([(a, a + w) for w in range(min_width, max_width + 1)
+                     for a in range(K - w + 1)])
+
+
+def _window_scan(Y, V, windows):
+    """Window contrast for every (window, frequency bin).
+
+    T[w, j] = (Ybar_in - Ybar_out)^2 / (1/W_in + 1/W_out), with weighted means
+    inside and outside window w. It is the reduction in the weighted chi^2
+    from adding the window's indicator to a constant fit, so T ~ chi2_1
+    under H0 for a single, pre-specified window. Returns (n_windows, J).
+    """
+    W = 1.0 / V
+    cw = np.vstack([np.zeros((1, W.shape[1])), np.cumsum(W, axis=0)])
+    cs = np.vstack([np.zeros((1, W.shape[1])), np.cumsum(W * Y, axis=0)])
+    a, b = windows[:, 0], windows[:, 1]
+    w_in, s_in = cw[b] - cw[a], cs[b] - cs[a]
+    w_out, s_out = cw[-1] - w_in, cs[-1] - s_in
+    diff = s_in / w_in - s_out / w_out
+    return diff**2 / (1.0 / w_in + 1.0 / w_out)
+
+
+def psr_test(grid: TFGrid, n_poly=3, n_perm=2000, rng=None,
+             scan_max_width=None) -> dict:
     """PSR-style analysis on bias-corrected log source power (selected bins).
 
     Common time effect (K-1 dof) and time x frequency interaction
@@ -380,6 +410,13 @@ def psr_test(grid: TFGrid, n_poly=3, n_perm=2000, rng=None) -> dict:
     compares a constant with a degree-`n_poly` polynomial in time in each
     frequency bin (J*n_poly dof), and `trend_max` is the most significant
     single bin (calibrated by permutation only).
+
+    The window scan targets short, localised changes that a low-order
+    polynomial misses: for every run of consecutive blocks up to
+    `scan_max_width` blocks long (default K // 2) and every frequency bin, it
+    compares the weighted mean inside the run with the mean outside
+    (`_window_scan`), and takes the maximum over runs and bins. Calibrated by
+    permutation only.
     """
     rng = np.random.default_rng(rng)
     keep = grid.keep
@@ -393,6 +430,13 @@ def psr_test(grid: TFGrid, n_poly=3, n_perm=2000, rng=None) -> dict:
     S_tot = S_T + S_IR
     dof_T, dof_IR = K - 1, (K - 1) * (J - 1)
     S_trend = S_tj.sum()
+    windows = scan_windows(K, scan_max_width)
+    T_scan = _window_scan(Y, V, windows)                         # (n_win, J)
+    iw, jw = np.unravel_index(np.argmax(T_scan), T_scan.shape)
+    a_s, b_s = windows[iw]
+    spb = grid.seg_per_block
+    t_scan = (float(grid.seg_time[a_s * spb]),
+              float(grid.seg_time[b_s * spb - 1] + grid.seg_len))
 
     # full-size per-bin outputs (NaN for excluded bins)
     J_all = grid.freq.size
@@ -411,21 +455,27 @@ def psr_test(grid: TFGrid, n_poly=3, n_perm=2000, rng=None) -> dict:
         S_trend_j=S_trend_j, p_trend_j=stats.chi2.sf(S_trend_j, d),
         trend_max=S_tj.max(), f_trend_max=grid.freq[keep][np.argmax(S_tj)],
         n_poly=d, z=z, n_bins_used=J, n_floored=n_floor,
+        scan_max=T_scan.max(), f_scan=grid.freq[keep][jw],
+        scan_blocks=(int(a_s), int(b_s)),
+        t_scan=t_scan, scan_sign=float(np.sign(zk[a_s:b_s, jw].mean())),
+        n_scan_windows=len(windows),
     )
     if n_perm:
         seg = grid.seg_pgram[:, keep]
-        null = np.empty((n_perm, 3))
+        null = np.empty((n_perm, 4))
         for i in range(n_perm):
             idx = rng.permutation(seg.shape[0])
             c, nl = _block(seg[idx], grid.seg_noise[idx], K)
             Yp, Vp, _ = log_source(c, nl, S_hat, grid.n)
             a, b, tj, _ = _psr_stats(Yp, Vp, E)
-            null[i] = a + b, tj.sum(), tj.max()
-        obs = np.array([S_tot, S_trend, S_tj.max()])
+            null[i] = (a + b, tj.sum(), tj.max(),
+                       _window_scan(Yp, Vp, windows).max())
+        obs = np.array([S_tot, S_trend, S_tj.max(), T_scan.max()])
         pp = (1 + np.sum(null >= obs, axis=0)) / (n_perm + 1)
         out.update(p_total_perm=pp[0], p_trend_perm=pp[1],
-                   p_trend_max_perm=pp[2], null_trend=null[:, 1],
-                   null_total=null[:, 0])
+                   p_trend_max_perm=pp[2], p_scan_perm=pp[3],
+                   null_trend=null[:, 1], null_total=null[:, 0],
+                   null_scan=null[:, 3])
     return out
 
 
@@ -662,7 +712,7 @@ class StationarityReport:
         """Permutation p-values where available, else analytic."""
         p = self.psr
         out = {k: p[k] for k in ("p_total_perm", "p_trend_perm",
-                                 "p_trend_max_perm") if k in p}
+                                 "p_trend_max_perm", "p_scan_perm") if k in p}
         if not out:
             out = dict(p_total=p["p_total"], p_trend=p["p_trend"])
         if self.surrogate is not None:
@@ -693,6 +743,11 @@ class StationarityReport:
             f"  max-bin trend       S={p['trend_max']:8.1f}  at "
             f"{p['f_trend_max']:.2f} Hz"
             + (f"  p_perm={p['p_trend_max_perm']:.3g}" if perm else ""),
+            f"  window scan         S={p['scan_max']:8.1f}  at "
+            f"{p['f_scan']:.2f} Hz, {p['t_scan'][0]:.0f}-{p['t_scan'][1]:.0f} s"
+            f" ({'high' if p['scan_sign'] > 0 else 'low'}; "
+            f"{p['n_scan_windows']} windows)"
+            + (f"  p_perm={p['p_scan_perm']:.3g}" if perm else ""),
         ]
         if self.surrogate is not None:
             s = self.surrogate
@@ -718,7 +773,8 @@ def run_all(counts=None, dt=None, seg_len=8.0, n_blocks=16, fmin=0.25,
             max_noise_frac=0.3, n_poly=3, n_perm=2000, n_surr=99,
             surrogate=True, prior_stationary=0.5, seed=None,
             lc=None, gti=None, bkg_rate=0.0, noise_scale=1.0,
-            noise_level_value=None, f_noise=None) -> StationarityReport:
+            noise_level_value=None, f_noise=None,
+            scan_max_width=None) -> StationarityReport:
     """Build the grid and run every test.
 
     Takes a stingray `Lightcurve` (`lc`) or a `counts` array with `dt`. The
@@ -732,7 +788,8 @@ def run_all(counts=None, dt=None, seg_len=8.0, n_blocks=16, fmin=0.25,
                          max_noise_frac=max_noise_frac, bkg_rate=bkg_rate,
                          noise_scale=noise_scale,
                          noise_level_value=noise_level_value, f_noise=f_noise)
-    psr = psr_test(grid, n_poly=n_poly, n_perm=n_perm, rng=rng)
+    psr = psr_test(grid, n_poly=n_poly, n_perm=n_perm, rng=rng,
+                   scan_max_width=scan_max_width)
     sur = None
     if surrogate and len(lc.gti) == 1:
         sur = surrogate_test(np.asarray(lc.counts, float), lc.dt,

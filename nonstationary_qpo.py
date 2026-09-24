@@ -260,6 +260,9 @@ def build_parser():
     t.add_argument("--max-noise-frac", type=float, default=0.3,
                    help="use only bins where the Poisson level is at most "
                         "this fraction of the total power")
+    t.add_argument("--scan-width", type=int, default=None,
+                   help="longest run of blocks in the window scan "
+                        "(default: half the blocks)")
     t.add_argument("--n-poly", type=int, default=3,
                    help="polynomial degree of the time-evolution model; "
                         "0 = arbitrary time dependence")
@@ -301,6 +304,7 @@ def run_one(model, args):
                   fmin=args.fmin, fmax=args.fmax, fbin=args.fbin,
                   norm=args.norm, noise=args.noise,
                   max_noise_frac=args.max_noise_frac, n_poly=args.n_poly or None,
+                  scan_max_width=args.scan_width,
                   n_perm=args.n_perm, n_surr=args.n_surr,
                   surrogate=not args.no_surrogate, prior_stationary=args.prior,
                   seed=args.seed + 1)

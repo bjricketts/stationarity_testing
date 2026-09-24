@@ -56,7 +56,7 @@ def one(job):
     r = psr_test(g, n_perm=200, rng=seed)
     b = bayes_test(g)
     return (r["p_total"], r["p_trend"], r["p_trend_max_perm"], b["P_stationary"],
-            r["p_total_perm"], r["p_trend_perm"])
+            r["p_total_perm"], r["p_trend_perm"], r["p_scan_perm"])
 
 
 def binom_ok(k, n, p=0.05, alpha=0.01):
@@ -103,15 +103,18 @@ def main():
         ("rms_drift", "rms_drift", {"d_rms": 0.6}, {}, "alt"),
         ("rms_drift @ 1000 ct/s", "rms_drift", {"d_rms": 0.6, "mean": 1000.0},
          {}, "alt"),
+        # short, localised change: +5 % in f0 for ~100 s around the midpoint
+        ("freq_burst", "freq_drift", {"d_f0": 0.05, "profile": "burst"}, {},
+         "report"),
     ]
     jobs = [(m, kw, tkw, s) for _, m, kw, tkw, _ in cases for s in range(a.nsim)]
     with Pool(a.workers) as p:
-        res = np.array(p.map(one, jobs)).reshape(len(cases), a.nsim, 6)
+        res = np.array(p.map(one, jobs)).reshape(len(cases), a.nsim, 7)
 
     for (m, _, _, _, role), r in zip(cases, res):
-        cols = [0, 1, 4, 5, 2]
+        cols = [0, 1, 4, 5, 2, 6]
         names = ["total chi2", "trend chi2", "total perm", "trend perm",
-                 "max-bin perm"]
+                 "max-bin perm", "window scan perm"]
         k = (r[:, cols] < 0.05).sum(axis=0)
         print(f"  {m}: p<0.05 counts (" + ", ".join(names) + ") = "
               f"{tuple(int(v) for v in k)}; median P(stat) = {np.median(r[:, 3]):.3g}")
@@ -126,6 +129,8 @@ def main():
             check(f"{m}: P(stationary) < 0.05 in <= 5 % of sims",
                   np.mean(r[:, 3] < 0.05) <= 0.05 + 2 / a.nsim,
                   f"{np.mean(r[:, 3] < 0.05):.2f}")
+        elif role == "report":
+            continue
         else:
             check(f"{m}: trend test detects in >= 90 %",
                   np.mean(r[:, 1] < 0.05) >= 0.9, f"{np.mean(r[:, 1] < 0.05):.2f}")
